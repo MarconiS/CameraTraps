@@ -3,9 +3,10 @@
 # combine_api_outputs.py
 #
 # Merges two or more .json files in batch API output format, optionally
-# writing the results to another .json file.  Concatenates image lists,
-# erroring if images are not unique.  Errors if class lists are conflicting, errors 
-# on unrecognized fields.  Checks compatibility in info structs, within reason.
+# writing the results to another .json file.
+# - Concatenates image lists, erroring if images are not unique.
+# - Errors if class lists are conflicting; errors on unrecognized fields.
+# - Checks compatibility in info structs, within reason.
 #
 # File format:
 #
@@ -14,6 +15,9 @@
 # Command-line use:
 #
 # combine_api_outputs input1.json input2.json ... inputN.json output.json
+#
+# Also see combine_api_shard_files (not exposed via the command line yet) to combine the
+# intermediate files created by the API.
 #
 ####
 
@@ -25,7 +29,7 @@ import argparse
 
 #%% Merge functions
 
-def combine_api_output_files(input_files,output_file=None):
+def combine_api_output_files(input_files,output_file=None,require_uniqueness=True):
     """
     Merges the list of .json-formatted API output files *input_files* into a single
     dictionary, optionally writing the result to *output_file*.
@@ -37,7 +41,7 @@ def combine_api_output_files(input_files,output_file=None):
         input_dicts.append(json.load(open(fn)))
     
     print('Merging results')
-    merged_dict = combine_api_output_dictionaries(input_dicts)
+    merged_dict = combine_api_output_dictionaries(input_dicts,require_uniqueness=require_uniqueness)
     
     print('Writing output')
     if output_file is not None:
@@ -47,7 +51,7 @@ def combine_api_output_files(input_files,output_file=None):
     return merged_dict
 
 
-def combine_api_output_dictionaries(input_dicts):
+def combine_api_output_dictionaries(input_dicts,require_uniqueness=True):
     """
     Merges the list of API output dictionaries *input_dicts*.  See header comment
     for details on merge rules.
@@ -58,6 +62,8 @@ def combine_api_output_dictionaries(input_dicts):
     info = {}
     detection_categories = {}
     classification_categories = {}    
+    n_redundant_images = 0
+    n_images = 0
     
     for input_dict in input_dicts:
         
@@ -85,8 +91,13 @@ def combine_api_output_dictionaries(input_dicts):
         
         # Merge image lists, checking uniqueness
         for im in input_dict['images']:
-            assert im['file'] not in images, 'Duplicate image: {}'.format(im['file'])
+            if require_uniqueness:
+                assert im['file'] not in images, 'Duplicate image: {}'.format(im['file'])
+            elif im['file'] in images:
+                n_redundant_images += 1
+                # print('Warning, duplicate results for image: {}'.format(im['file']))
             images[im['file']] = im
+            n_images += 1
         
         # Merge info dicts, within reason
         if len(info) == 0:
@@ -104,6 +115,10 @@ def combine_api_output_dictionaries(input_dicts):
                     
     # ...for each dictionary
 
+    if n_redundant_images > 0:
+        print('Warning: found {} redundant images (of {}) during merge'.format(
+            n_redundant_images,n_images))
+        
     # Convert merged image dictionaries to a sorted list
     sorted_images = sorted(images.values(), key = lambda im: im['file']) 
     
@@ -113,6 +128,36 @@ def combine_api_output_dictionaries(input_dicts):
         
     return merged_dict
     
+
+def combine_api_shard_files(input_files,output_file=None):
+    """
+    Merges the list of .json-formatted API shard files *input_files* into a single
+    list of dictionaries, optionally writing the result to *output_file*.
+    """
+    
+    input_lists = []
+    print('Loading input files')
+    for fn in input_files:
+        input_lists.append(json.load(open(fn)))
+    
+    detections = []
+    # detection_list = input_lists[0]
+    for detection_list in input_lists:
+        assert isinstance(detection_list,list)
+        # d = detection_list[0]
+        for d in detection_list:
+            assert 'file' in d
+            assert 'max_detection_conf' in d
+            assert 'detections' in d
+            detections.extend([d])
+            
+    print('Writing output')
+    if output_file is not None:
+        with open(output_file, 'w') as f:
+            json.dump(detections, f, indent=1)
+    
+    return detections
+
 
 #%% Driver
     

@@ -45,7 +45,10 @@ class DbVizOptions:
     trim_to_images_with_bboxes = False
     random_seed = 0 # None
     add_search_links = False
+    
+    # These are mutually exclusive
     classes_to_exclude = None
+    classes_to_include = None
 
     # We sometimes flatten image directories by replacing a path separator with 
     # another character.  Leave blank for the typical case where this isn't necessary.
@@ -125,21 +128,35 @@ def process_images(db_path,output_dir,image_base_dir,options=None):
         imagesWithBboxes = list(compress(images, bImageHasBbox))
         images = imagesWithBboxes
                 
-    # Optionally remove images with specific labels, *before* sampling
-    if options.classes_to_exclude is not None:
+    # Optionally include/remove images with specific labels, *before* sampling
+        
+    assert (not ((options.classes_to_exclude is not None) and (options.classes_to_include is not None))), \
+        'Cannot specify an inclusion and exclusion list'
+        
+    if (options.classes_to_exclude is not None) or (options.classes_to_include is not None):
      
         print('Indexing database')
         indexed_db = IndexedJsonDb(image_db)
         bValidClass = [True] * len(images)        
         for iImage,image in enumerate(images):
             classes = indexed_db.get_classes_for_image(image)
-            for excludedClass in options.classes_to_exclude:
-                if excludedClass in classes:
-                   bValidClass[iImage] = False
-                   break
-               
+            if options.classes_to_exclude is not None:
+                for excludedClass in options.classes_to_exclude:
+                    if excludedClass in classes:
+                       bValidClass[iImage] = False
+                       break
+            elif options.classes_to_include is not None:       
+                bValidClass[iImage] = False
+                for c in classes:
+                    if c in options.classes_to_include:
+                        bValidClass[iImage] = True
+                        break                        
+            else:
+                raise ValueError('Illegal include/exclude combination')
+                
         imagesWithValidClasses = list(compress(images, bValidClass))
         images = imagesWithValidClasses    
+    
     
     # Put the annotations in a dataframe so we can select all annotations for a given image
     print('Creating data frames')
@@ -212,8 +229,8 @@ def process_images(db_path,output_dir,image_base_dir,options=None):
         
         imageClasses = ', '.join(imageCategories)
                 
-        file_name = '{}_gtbbox.jpg'.format(img_id.lower().split('.jpg')[0])
-        file_name = file_name.replace('/', '~')
+        file_name = '{}_gt.jpg'.format(img_id.lower().split('.jpg')[0])
+        file_name = file_name.replace('/', '~').replace('\\','~')
         
         rendering_info.append({'bboxes':bboxes, 'boxClasses':boxClasses, 'img_path':img_path,
                                'output_file_name':file_name})
@@ -269,7 +286,7 @@ def process_images(db_path,output_dir,image_base_dir,options=None):
         else:
             print('Rendering images with {} workers'.format(options.parallelize_rendering_n_cores))
             pool = ThreadPool(options.parallelize_rendering_n_cores)
-            tqdm(pool.imap(render_image_info, rendering_info), total=len(rendering_info))
+        tqdm(pool.imap(render_image_info, rendering_info), total=len(rendering_info))
     else:
         for file_info in tqdm(rendering_info):        
             render_image_info(file_info)
@@ -332,7 +349,7 @@ def main():
     parser.add_argument('--pathsep_replacement', action='store', type=str, default='',
                         help='Replace path separators in relative filenames with another character (frequently ~)')
     
-    if len(sys.argv[1:])==0:
+    if len(sys.argv[1:]) == 0:
         parser.print_help()
         parser.exit()
             
@@ -340,7 +357,7 @@ def main():
     
     # Convert to an options object
     options = DbVizOptions()
-    args_to_object(args,options)
+    args_to_object(args, options)
     if options.random_sort:
         options.sort_by_filename = False
         
